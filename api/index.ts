@@ -7,6 +7,12 @@ const { sql } = require('@vercel/postgres');
 const bodyParser = require('body-parser');
 const path = require('path');
 
+const Mineflayer = require('mineflayer');
+const { sleep, getRandom } = require("./utils.js");
+const { readFileSync } = require('fs');
+
+const CONFIG = JSON.parse(readFileSync(path.join(__dirname, '../config.json'), 'utf-8'));
+
 // Create application/x-www-form-urlencoded parser
 const urlencodedParser = bodyParser.urlencoded({ extended: false });
 
@@ -106,6 +112,79 @@ app.get('/allUsers', async (req, res) => {
 		res.status(500).send('Error retrieving users');
 	}
 });
+
+
+
+
+let loop: NodeJS.Timeout;
+let bot: any;
+
+const disconnect = (): void => {
+	clearInterval(loop);
+	bot?.quit?.();
+	bot?.end?.();
+};
+const reconnect = async (): Promise<void> => {
+	console.log(`Trying to reconnect in ${CONFIG.action.retryDelay / 1000} seconds...\n`);
+
+	disconnect();
+	await sleep(CONFIG.action.retryDelay);
+	createBot();
+	return;
+};
+
+const createBot = (): void => {
+	bot = Mineflayer.createBot({
+		host: CONFIG.client.host,
+		port: +CONFIG.client.port,
+		username: CONFIG.client.username
+	} as const);
+
+
+	bot.once('error', error => {
+		console.error(`AFKBot got an error: ${error}`);
+	});
+	bot.once('kicked', rawResponse => {
+		console.error(`\n\nAFKbot is disconnected: ${rawResponse}`);
+	});
+	bot.once('end', () => void reconnect());
+
+	bot.once('spawn', () => {
+		const changePos = async (): Promise<void> => {
+			const lastAction = getRandom(CONFIG.action.commands) as any;
+			const halfChance: boolean = Math.random() < 0.5? true : false; // 50% chance to sprint
+
+			console.debug(`${lastAction}${halfChance? " with sprinting" : ''}`);
+
+			bot.setControlState('sprint', halfChance);
+			bot.setControlState(lastAction, true); // starts the selected random action
+
+			await sleep(CONFIG.action.holdDuration);
+			bot.clearControlStates();
+			return;
+		};
+		const changeView = async (): Promise<void> => {
+			const yaw = (Math.random() * Math.PI) - (0.5 * Math.PI),
+				pitch = (Math.random() * Math.PI) - (0.5 * Math.PI);
+			
+			await bot.look(yaw, pitch, false);
+			return;
+		};
+		
+		loop = setInterval(() => {
+			changeView();
+			changePos();
+		}, CONFIG.action.holdDuration);
+	});
+	bot.once('login', () => {
+		console.log(`AFKBot logged in ${bot.username}\n\n`);
+	});
+};
+
+
+
+createBot();
+
 
 app.listen(3000, () => console.log('Server ready on port 3000.'));
 
